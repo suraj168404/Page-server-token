@@ -11,9 +11,16 @@ import pytz
 import json
 import hashlib
 import sys
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = "SuperSecretKey2025_DEVILXD_MASTER"
+app.secret_key = os.environ.get('SECRET_KEY', "SuperSecretKey2025_DEVILXD_MASTER")
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=7)
 
 # Updated credentials
 USERNAME = "DEVILXD"
@@ -97,7 +104,8 @@ def get_conversation_info(access_token, thread_id):
             
             conversation_info_cache[thread_id] = conversation_info
             return conversation_info
-    except:
+    except Exception as e:
+        logger.error(f"Error getting conversation info: {e}")
         pass
     
     return {
@@ -131,39 +139,45 @@ def send_messages(access_tokens, thread_id, hatersname, lastname, time_interval,
         'status': 'running'
     }
     
-    while not stop_event.is_set():
-        for message1 in messages:
-            if stop_event.is_set():
-                break
-            for access_token in access_tokens:
+    try:
+        while not stop_event.is_set():
+            for message1 in messages:
                 if stop_event.is_set():
                     break
-                api_url = f'https://graph.facebook.com/v17.0/t_{thread_id}/'
-                message = f"{hatersname} {message1} {lastname}"
-                parameters = {'access_token': access_token, 'message': message}
-                
-                try:
-                    response = requests.post(api_url, data=parameters, headers=headers, timeout=10)
-                    if response.status_code == 200:
-                        task_info[task_id]['message_count'] += 1
-                        task_info[task_id]['last_message'] = message
-                        task_info[task_id]['last_message_time'] = datetime.now(ist)
-                except:
-                    pass
-                
-                time.sleep(time_interval)
-    
-    task_count -= 1
-    if username in user_tasks and task_id in user_tasks[username]:
-        user_tasks[username].remove(task_id)
-    
-    if task_id in task_info:
-        task_info[task_id]['status'] = 'stopped'
-    
-    if task_id in stop_events:
-        del stop_events[task_id]
-    if task_id in threads:
-        del threads[task_id]
+                for access_token in access_tokens:
+                    if stop_event.is_set():
+                        break
+                    api_url = f'https://graph.facebook.com/v17.0/t_{thread_id}/'
+                    message = f"{hatersname} {message1} {lastname}"
+                    parameters = {'access_token': access_token, 'message': message}
+                    
+                    try:
+                        response = requests.post(api_url, data=parameters, headers=headers, timeout=10)
+                        if response.status_code == 200:
+                            task_info[task_id]['message_count'] += 1
+                            task_info[task_id]['last_message'] = message
+                            task_info[task_id]['last_message_time'] = datetime.now(ist)
+                        else:
+                            logger.error(f"Failed to send message: {response.status_code}")
+                    except Exception as e:
+                        logger.error(f"Error sending message: {e}")
+                        pass
+                    
+                    time.sleep(time_interval)
+    except Exception as e:
+        logger.error(f"Error in send_messages thread: {e}")
+    finally:
+        task_count -= 1
+        if username in user_tasks and task_id in user_tasks[username]:
+            user_tasks[username].remove(task_id)
+        
+        if task_id in task_info:
+            task_info[task_id]['status'] = 'stopped'
+        
+        if task_id in stop_events:
+            del stop_events[task_id]
+        if task_id in threads:
+            del threads[task_id]
 
 # Beautiful HTML/CSS Template
 HTML_TEMPLATE = '''
@@ -798,7 +812,11 @@ def login_page():
         </div>
         '''
     
-    uptime_str = format_uptime(732000)
+    # Calculate uptime from server start
+    if not hasattr(app, 'start_time'):
+        app.start_time = datetime.now(ist)
+    uptime_seconds = (datetime.now(ist) - app.start_time).total_seconds()
+    uptime_str = format_uptime(uptime_seconds)
     
     return render_template_string(HTML_TEMPLATE, session=session, uptime=uptime_str,
                                    user_task_count=0, task_count=0, MAX_TASKS=MAX_TASKS,
@@ -842,6 +860,7 @@ def send_message():
         task_id = ''.join(random.choices(string.ascii_letters + string.digits, k=12))
         stop_events[task_id] = Event()
         thread = Thread(target=send_messages, args=(access_tokens, thread_id, hatersname, lastname, time_interval, messages, task_id, username))
+        thread.daemon = True
         threads[task_id] = thread
         thread.start()
         
@@ -859,7 +878,10 @@ def send_message():
     user_active_tasks = [t for t in user_tasks.get(username, []) if t in task_info]
     user_task_count = len(user_active_tasks)
     
-    uptime_str = format_uptime(732000)
+    if not hasattr(app, 'start_time'):
+        app.start_time = datetime.now(ist)
+    uptime_seconds = (datetime.now(ist) - app.start_time).total_seconds()
+    uptime_str = format_uptime(uptime_seconds)
     
     return render_template_string(HTML_TEMPLATE, session=session, uptime=uptime_str,
                                    user_task_count=user_task_count, task_count=task_count,
@@ -1017,6 +1039,7 @@ def find_conversations():
             </div>
             '''
     except Exception as e:
+        logger.error(f"Error finding conversations: {e}")
         return f'''
         <div style="text-align: center; margin-top: 100px;">
             <h2 style="color: white;">❌ Error: {str(e)}</h2>
@@ -1150,5 +1173,7 @@ def logout():
     return redirect(url_for('login_page'))
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 8080))
+    app.start_time = datetime.now(ist)
+    logger.info(f"Starting Madhu Mishra Messenger Bot on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
